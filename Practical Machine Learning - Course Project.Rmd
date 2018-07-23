@@ -1,0 +1,121 @@
+---
+title: 'Peer-graded Assignment: Prediction Assignment Writeup'
+author: "Alan Cash"
+date: "17 July 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, error = FALSE, message = FALSE, cache = TRUE)
+```
+
+# Data
+
+Six young health participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E).
+
+Class A corresponds to the specified execution of the exercise, while the other 4 classes correspond to common mistakes. Participants were supervised by an experienced weight lifter to make sure the execution complied to the manner they were supposed to simulate. The exercises were performed by six male participants aged between 20-28 years, with little weight lifting experience. We made sure that all participants could easily simulate the mistakes in a safe and controlled manner by using a relatively light dumbbell (1.25kg).
+
+Read more: http://groupware.les.inf.puc-rio.br/har#ixzz5LUyuQNMN
+
+# Exploratory analysis
+
+```{r}
+
+x <- c("dplyr", "caret", "parallel", "doParallel", "corrplot")
+
+invisible(lapply(x, require, character.only = TRUE))
+
+# read in data sets
+
+training <- read.csv("pml-training.csv", stringsAsFactors = FALSE, na.strings = c("#DIV/0!", "NA"))
+testing <- read.csv("pml-testing.csv", stringsAsFactors = FALSE, na.strings = c("#DIV/0!", "NA"))
+
+dim(training)
+
+table(training$classe)
+
+```
+
+The training set consists of 19622 observations of 160 variables, the first 7 of which are time and participant identifiers. Each participant's data are split into a number of 'windows', representing the completion of a repetition of one of the exercises. Summary statistics are available for the data from each repetition. The labels which categorise what version of the exercise are being performed are contained in the classe variable - there are more of category A than the other classes in the training set.
+
+```{r}
+# select potential predictors based on what is available in the test set
+
+x <- apply(testing, 2, FUN= function(x){all(is.na(x))})
+testing <- testing[,!x]
+
+df <- training[,colnames(training) %in% colnames(testing)]
+df$classe <- training$classe 
+
+df <- df[,8:ncol(df)]
+
+```
+
+After checking what predictors are available in the test set and filtering the training set accordingly we are left with 52 potential predictors. 
+
+```{r, fig.width= 10, fig.height= 10}
+
+p <- cor(df[,1:52])
+corrplot(p, type = "upper")
+
+```
+
+As we can see in the plot above a number of the variables are highly correlated with each other. I have chosen to eliminate them from the testing set rather than use a PCA to keep things interpretable. I have used the automatic method from the Caret package in this instance. 
+
+```{r}
+
+var.cor <- cor(df[, -53])
+x <- findCorrelation(var.cor, cutoff = 0.8)
+df <- df[,-x]
+
+```
+
+# Training
+
+This whittles the useful predictors down to 39 which we now use to begin modelling. I will begin by using a random forest model on the whole training set. I have used 5 fold cross validation on the training set to gauge accuracy and reduce overfitting the model to the training data.
+
+```{r}
+set.seed(1234)
+
+# Initialise parallel processing to speed things up a bit (thanks to Len Greski for his article on this subject: https://rpubs.com/lgreski/improvingCaretPerformance)
+
+cluster <- makeCluster(detectCores() - 1)
+registerDoParallel(cluster)
+
+# Train model
+
+train_control <- trainControl(method = "cv", number=5, allowParallel = TRUE)
+
+y <- df[,40]
+x <- df[,-40]
+
+fit <- train(x, y, data=df, trControl=train_control, method="rf")
+
+stopCluster(cluster)
+
+fit
+
+```
+
+# Evaluation
+
+We can now generate a confusion matrix on from our training set to assess its average accuracy:
+
+```{r}
+confusionMatrix.train(fit)
+
+```
+
+From this we can see that our cross validated model performs pretty well on the training set. 
+
+'In sample error ' is the error rate you get on the same data set used to build the predictor (train). 'Out of sample' error is the error when fitting the model to a new data set (test). Our accuracy on the training set is `r fit$results[1, 2]` . I would expect the out of sample accuracy to be less than this due to a degree of overfitting. The cross validation training method should hopefully reduce this however due to the model being trained on multiple subsets of the training data.
+
+The model can then be applied to the testing dataset as below.
+
+```{r}
+
+testing$Prediction <- predict(fit, newdata = testing)
+
+```
+
+
